@@ -122,7 +122,7 @@ def detect_devices():
             "method": "tools/call",
             "params": {
                 "name": "mobile_list_available_devices",
-                "arguments": {}
+                "arguments": {"noParams": {}}
             }
         }
         response = requests.post(f"{MCP_SERVER_URL}/mcp", json=mcp_request, timeout=10)
