@@ -4,6 +4,7 @@ import os
 from PIL import Image
 from io import BytesIO
 import json
+import subprocess
 
 app = Flask(__name__)
 
@@ -108,6 +109,65 @@ def call_mcp_tool(tool_name: str, params: dict) -> dict:
         print(f"Error calling MCP tool {tool_name}: {e}")
         raise e
 
+def detect_devices():
+    """
+    检测本地可用的移动设备（通过MCP工具优先，失败则用adb/idevice_id）
+    返回：设备列表（如无设备则为空列表）
+    """
+    # 优先用 MCP 工具检测
+    try:
+        mcp_request = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "mobile_list_available_devices",
+                "arguments": {}
+            }
+        }
+        response = requests.post(f"{MCP_SERVER_URL}/mcp", json=mcp_request, timeout=10)
+        if response.ok and response.text.strip():
+            resp_json = response.json()
+            # 尝试解析设备信息
+            if 'result' in resp_json and 'content' in resp_json['result']:
+                content = resp_json['result']['content'][0]['text']
+                # 解析设备列表
+                devices = []
+                for line in content.split('\n'):
+                    if ':' in line:
+                        label, val = line.split(':', 1)
+                        devices.append(val.strip())
+                return devices
+    except Exception as e:
+        print(f"MCP设备检测失败: {e}")
+    # 兜底用adb/idevice_id检测
+    devices = []
+    try:
+        adb_out = subprocess.check_output(['adb', 'devices'], text=True)
+        for line in adb_out.splitlines():
+            if '\tdevice' in line:
+                devices.append('Android: ' + line.split('\t')[0])
+    except Exception:
+        pass
+    try:
+        idev_out = subprocess.check_output(['idevice_id', '-l'], text=True)
+        for line in idev_out.splitlines():
+            if line.strip():
+                devices.append('iOS: ' + line.strip())
+    except Exception:
+        pass
+    return devices
+
+@app.route('/devices', methods=['GET'])
+def list_devices():
+    """
+    查询当前可用的移动设备
+    """
+    devices = detect_devices()
+    if not devices:
+        return jsonify({"devices": [], "message": "未检测到可用设备，请插入手机或启动模拟器。"})
+    return jsonify({"devices": devices, "message": "检测到可用设备。"})
+
 @app.route('/execute', methods=['POST'])
 def execute_command():
     """
@@ -117,6 +177,11 @@ def execute_command():
     data = request.get_json()
     if not data or 'command' not in data:
         return jsonify({"error": "Invalid request, 'command' not found"}), 400
+
+    # 先检测设备
+    devices = detect_devices()
+    if not devices:
+        return jsonify({"error": "未检测到可用设备，请插入手机或启动模拟器。"}), 400
 
     command = data['command']
     print(f"Received command: {command}")
