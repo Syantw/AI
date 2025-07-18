@@ -70,7 +70,7 @@ def execute_command():
     """
     data = request.get_json()
     if not data or 'command' not in data:
-        return jsonify({{"error": "Invalid request, 'command' not found"}}), 400
+        return jsonify({"error": "Invalid request, 'command' not found"}), 400
 
     command = data['command']
     print(f"Received command: {command}")
@@ -78,7 +78,11 @@ def execute_command():
     # Get actions from Ollama
     actions = get_ollama_actions(command)
     if not actions:
-        return jsonify({{"error": "Failed to get actions from Ollama or no actions returned."}}), 500
+        return jsonify({"error": "Failed to get actions from Ollama or no actions returned."}), 500
+
+    # 兼容 actions 是 dict 的情况
+    if isinstance(actions, dict) and "actions" in actions:
+        actions = actions.get("actions", [])
 
     print(f"Executing actions: {actions}")
 
@@ -88,12 +92,12 @@ def execute_command():
 
     for i, action in enumerate(actions):
         action_name = action.get("action")
-        params = action.get("params", {{}})
+        params = action.get("params", {})
         print(f"Executing action {i+1}: {action_name} with params {params}")
 
         try:
             if action_name == 'screenshot':
-                res = requests.get(f"{{MCP_SERVER_URL}}/screenshot")
+                res = requests.get(f"{MCP_SERVER_URL}/screenshot")
                 res.raise_for_status()
                 img = Image.open(BytesIO(res.content))
                 screenshot_path = os.path.join(SCREENSHOTS_DIR, f"step_{i}_{action_name}.png")
@@ -101,15 +105,15 @@ def execute_command():
                 screenshot_paths.append(screenshot_path)
 
             elif action_name == 'tap':
-                res = requests.post(f"{{MCP_SERVER_URL}}/tap", json=params)
+                res = requests.post(f"{MCP_SERVER_URL}/tap", json=params)
                 res.raise_for_status()
 
             elif action_name == 'type':
-                res = requests.post(f"{{MCP_SERVER_URL}}/type", json=params)
+                res = requests.post(f"{MCP_SERVER_URL}/type", json=params)
                 res.raise_for_status()
 
             elif action_name == 'swipe':
-                res = requests.post(f"{{MCP_SERVER_URL}}/swipe", json=params)
+                res = requests.post(f"{MCP_SERVER_URL}/swipe", json=params)
                 res.raise_for_status()
             
             elif action_name == 'sleep':
@@ -122,11 +126,11 @@ def execute_command():
         except requests.exceptions.RequestException as e:
             error_message = f"Failed to execute action '{action_name}': {e}"
             print(error_message)
-            return jsonify({{"error": error_message, "screenshot_paths": screenshot_paths}}), 500
+            return jsonify({"error": error_message, "screenshot_paths": screenshot_paths}), 500
         except Exception as e:
             error_message = f"An unexpected error occurred during action '{action_name}': {e}"
             print(error_message)
-            return jsonify({{"error": error_message, "screenshot_paths": screenshot_paths}}), 500
+            return jsonify({"error": error_message, "screenshot_paths": screenshot_paths}), 500
 
 
     # Combine screenshots into a long image
@@ -146,11 +150,11 @@ def execute_command():
 
         long_image_path = os.path.join(SCREENSHOTS_DIR, "final_flow.png")
         long_image.save(long_image_path)
-        return jsonify({{"message": "Execution successful", "final_image": long_image_path, "actions_executed": actions}})
+        return jsonify({"message": "Execution successful", "final_image": long_image_path, "actions_executed": actions})
     elif screenshot_paths:
-        return jsonify({{"message": "Execution successful", "final_image": screenshot_paths[0], "actions_executed": actions}})
+        return jsonify({"message": "Execution successful", "final_image": screenshot_paths[0], "actions_executed": actions})
     else:
-        return jsonify({{"message": "Execution successful, no screenshots taken", "actions_executed": actions}})
+        return jsonify({"message": "Execution successful, no screenshots taken", "actions_executed": actions})
 
 
 if __name__ == '__main__':
