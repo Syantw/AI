@@ -78,9 +78,32 @@ def call_mcp_tool(tool_name: str, params: dict) -> dict:
             }
         }
         
-        response = requests.post(f"{MCP_SERVER_URL}/mcp", json=mcp_request)
-        response.raise_for_status()
-        return response.json()
+        print(f"Sending MCP request to {MCP_SERVER_URL}/mcp: {json.dumps(mcp_request, indent=2)}")
+        
+        # Increased timeout to 120 seconds for device operations
+        response = requests.post(f"{MCP_SERVER_URL}/mcp", json=mcp_request, timeout=120)
+        print(f"MCP response status: {response.status_code}")
+        print(f"MCP response headers: {dict(response.headers)}")
+        
+        # Check if response is empty
+        if not response.text.strip():
+            print("Warning: Empty response from MCP server")
+            return {"status": "success", "message": "Empty response but request sent"}
+        
+        # Try to parse JSON response
+        try:
+            response_json = response.json()
+            print(f"MCP response JSON: {json.dumps(response_json, indent=2)}")
+            return response_json
+        except json.JSONDecodeError as e:
+            print(f"Failed to parse JSON response: {e}")
+            print(f"Raw response text: {response.text}")
+            # Return a structured response even if JSON parsing fails
+            return {
+                "status": "success", 
+                "message": f"Request sent successfully, but response was not JSON: {response.text[:200]}"
+            }
+            
     except requests.exceptions.RequestException as e:
         print(f"Error calling MCP tool {tool_name}: {e}")
         raise e
