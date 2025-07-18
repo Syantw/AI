@@ -20,22 +20,23 @@ def get_ollama_actions(command: str) -> list:
     prompt = f"""
     You are an expert at controlling a mobile phone. Your task is to convert a natural language instruction into a sequence of precise actions that can be executed by a machine.
     The available actions are:
-    - tap(x, y): Taps a specific coordinate on the screen.
-    - screenshot(): Takes a screenshot of the current screen.
-    - type(text): Types the given text.
-    - swipe(startX, startY, endX, endY, duration): Swipes from a start to an end coordinate.
-    - sleep(ms): Waits for a specified number of milliseconds.
+    - mobile_launch_app: Launches an app by package name
+    - mobile_take_screenshot: Takes a screenshot of the current screen
+    - mobile_click_on_screen_at_coordinates: Taps a specific coordinate on the screen
+    - mobile_type_keys: Types the given text
+    - mobile_swipe_on_screen: Swipes in a direction
+    - mobile_press_button: Presses a device button (HOME, BACK, etc.)
 
     Instruction: "{command}"
 
-    Based on the instruction, provide a JSON array of actions to be executed in sequence. For "tap" actions, you must provide coordinates. For "type" actions, you must provide the text.
+    Based on the instruction, provide a JSON array of actions to be executed in sequence. For "mobile_click_on_screen_at_coordinates" actions, you must provide coordinates. For "mobile_type_keys" actions, you must provide the text. For "mobile_launch_app" actions, you must provide the package name.
 
     Example:
-    Instruction: "Open the settings and then take a screenshot."
+    Instruction: "Open WeChat and take a screenshot"
     Output:
     [
-        {{"action": "tap", "params": {{"x": 500, "y": 200}}}},
-        {{"action": "screenshot", "params": {{}}}}
+        {{"action": "mobile_launch_app", "params": {{"packageName": "com.tencent.mm"}}}},
+        {{"action": "mobile_take_screenshot", "params": {{}}}}
     ]
 
     Now, generate the JSON for the instruction above.
@@ -61,6 +62,28 @@ def get_ollama_actions(command: str) -> list:
         print(f"Raw response: {response.text}")
         return []
 
+def call_mcp_tool(tool_name: str, params: dict) -> dict:
+    """
+    Calls a mobile-mcp tool via MCP protocol
+    """
+    try:
+        # MCP protocol format
+        mcp_request = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": tool_name,
+                "arguments": params
+            }
+        }
+        
+        response = requests.post(f"{MCP_SERVER_URL}/mcp", json=mcp_request)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"Error calling MCP tool {tool_name}: {e}")
+        raise e
 
 @app.route('/execute', methods=['POST'])
 def execute_command():
@@ -96,29 +119,35 @@ def execute_command():
         print(f"Executing action {i+1}: {action_name} with params {params}")
 
         try:
-            if action_name == 'screenshot':
-                res = requests.get(f"{MCP_SERVER_URL}/screenshot")
-                res.raise_for_status()
-                img = Image.open(BytesIO(res.content))
+            if action_name == 'mobile_take_screenshot':
+                # Call MCP tool for screenshot
+                result = call_mcp_tool("mobile_take_screenshot", {})
+                print(f"Screenshot result: {result}")
+                
+                # Save screenshot if needed
                 screenshot_path = os.path.join(SCREENSHOTS_DIR, f"step_{i}_{action_name}.png")
-                img.save(screenshot_path)
+                # Note: MCP response format may vary, you might need to extract image data
                 screenshot_paths.append(screenshot_path)
 
-            elif action_name == 'tap':
-                res = requests.post(f"{MCP_SERVER_URL}/tap", json=params)
-                res.raise_for_status()
+            elif action_name == 'mobile_launch_app':
+                result = call_mcp_tool("mobile_launch_app", params)
+                print(f"Launch app result: {result}")
 
-            elif action_name == 'type':
-                res = requests.post(f"{MCP_SERVER_URL}/type", json=params)
-                res.raise_for_status()
+            elif action_name == 'mobile_click_on_screen_at_coordinates':
+                result = call_mcp_tool("mobile_click_on_screen_at_coordinates", params)
+                print(f"Click result: {result}")
 
-            elif action_name == 'swipe':
-                res = requests.post(f"{MCP_SERVER_URL}/swipe", json=params)
-                res.raise_for_status()
-            
-            elif action_name == 'sleep':
-                import time
-                time.sleep(params.get('ms', 1000) / 1000)
+            elif action_name == 'mobile_type_keys':
+                result = call_mcp_tool("mobile_type_keys", params)
+                print(f"Type result: {result}")
+
+            elif action_name == 'mobile_swipe_on_screen':
+                result = call_mcp_tool("swipe_on_screen", params)
+                print(f"Swipe result: {result}")
+
+            elif action_name == 'mobile_press_button':
+                result = call_mcp_tool("mobile_press_button", params)
+                print(f"Press button result: {result}")
 
             else:
                 print(f"Unknown action: {action_name}")
@@ -132,29 +161,40 @@ def execute_command():
             print(error_message)
             return jsonify({"error": error_message, "screenshot_paths": screenshot_paths}), 500
 
-
-    # Combine screenshots into a long image
+    # Return success response
     if len(screenshot_paths) > 1:
-        images = [Image.open(p) for p in screenshot_paths]
-        widths, heights = zip(*(i.size for i in images))
-
-        total_height = sum(heights)
-        max_width = max(widths)
-
-        long_image = Image.new('RGB', (max_width, total_height))
-
-        y_offset = 0
-        for im in images:
-            long_image.paste(im, (0, y_offset))
-            y_offset += im.size[1]
-
-        long_image_path = os.path.join(SCREENSHOTS_DIR, "final_flow.png")
-        long_image.save(long_image_path)
-        return jsonify({"message": "Execution successful", "final_image": long_image_path, "actions_executed": actions})
+        # Create a long image from multiple screenshots
+        images = []
+        for path in screenshot_paths:
+            if os.path.exists(path):
+                images.append(Image.open(path))
+        
+        if images:
+            # Create a vertical concatenation of all screenshots
+            total_height = sum(img.height for img in images)
+            max_width = max(img.width for img in images)
+            long_image = Image.new('RGB', (max_width, total_height))
+            
+            y_offset = 0
+            for img in images:
+                long_image.paste(img, (0, y_offset))
+                y_offset += img.height
+            
+            long_image_path = os.path.join(SCREENSHOTS_DIR, "final_flow.png")
+            long_image.save(long_image_path)
+            return jsonify({"message": "Execution successful", "final_image": long_image_path, "actions_executed": actions})
     elif screenshot_paths:
         return jsonify({"message": "Execution successful", "final_image": screenshot_paths[0], "actions_executed": actions})
     else:
         return jsonify({"message": "Execution successful, no screenshots taken", "actions_executed": actions})
+
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """
+    Health check endpoint
+    """
+    return jsonify({"status": "healthy", "message": "Agent server is running"})
 
 
 if __name__ == '__main__':
